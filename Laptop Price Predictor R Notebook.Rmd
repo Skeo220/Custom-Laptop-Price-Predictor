@@ -1,0 +1,465 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# libraries
+library(tidyverse)
+```
+
+```{r}
+# loading the dataset
+raw = read_csv(
+  here::here(
+    "Datasets",
+    "Laptop_price_estimator",
+    "laptop_price.csv"
+  )
+)
+```
+
+```{r}
+head(raw)
+```
+
+# **Data Cleaning**
+
+I decided to start with the data cleaning so that we can do a proper Exploratory.
+
+```{r}
+# raw_df = raw_df[-1] -  dropping the laptop_id feature and commenting it out since we only need to do this once.
+
+# Renaming the inches column to screen size
+raw = raw %>% rename(screen_size = Inches)
+# let's rename this to product type
+raw = raw %>% rename(product_type = TypeName)
+# column name formatting
+raw = janitor::clean_names(raw)
+```
+
+The screen_resolution columns needs to be separated into 3 columns: resolution, display, and touchscreen
+
+```{r}
+# display
+raw$display = gsub("\\d+x\\d+", "", raw$screen_resolution)
+
+# creating the touchscreen column from display column
+raw$touch_screen = ifelse(grepl("Touchscreen", raw$display), 1, 0)
+raw$touch_screen = factor(raw$touch_screen, levels = c(0, 1), labels = c("No", "Yes"))
+
+# display - continued
+raw$display = gsub("Touchscreen", "",raw$display)
+raw$display = gsub("/", "",raw$display)
+raw$display = trimws(raw$display)
+raw$display = ifelse(raw$display=="IPS Panel   4K Ultra HD", "IPS Panel 4K Ultra HD", raw$display)
+raw$display = ifelse(raw$display=="", "None",raw$display)
+raw$display = gsub("Touchscreen", "",raw$display)
+raw$display = gsub("/", "",raw$display)
+raw$display = trimws(raw$display)
+raw$display = ifelse(raw$display=="IPS Panel   4K Ultra HD", "IPS Panel 4K Ultra HD", raw$display)
+raw$display = ifelse(raw$display=="", "None",raw$display)  
+```
+
+```{r}
+# resolution
+raw$resolution = str_extract(raw$screen_resolution, "\\d+x\\d+")
+```
+
+There are three major CPU brands in our dataset. It would be beneficial to simplify use the brand names.
+
+```{r}
+# The CPU column
+split_cpu = str_split(raw$cpu, " ")
+# spliting the feature into  a list separate arguments
+split_cpu = str_split(raw$cpu, " ")
+# creating the CPU brand column
+raw$cpu = as.character(lapply(split_cpu, function(x) paste(x[1])))
+raw$processor_speed = map(split_cpu, tail, n = 1)
+raw$processor_speed = gsub("GHz", "", raw$processor_speed)
+raw$processor_speed = as.numeric(as.character(raw$processor_speed))
+```
+
+```{r}
+# The Ram column 
+raw$ram = gsub("GB", "", raw$ram)
+
+raw$ram = as.numeric(as.character(raw$ram))
+```
+
+```{r}
+# The memory column
+# spliting the column into  a list separate arguments
+split_memory = str_split(raw$memory, " ")
+# creating new list with the desired arguments
+drive_capacity = lapply(split_memory, function(x) paste(x[1], collapse = ""))
+drive_type = lapply(split_memory, function(x) paste(x[2],x[3], collapse = ""))
+extra_drive_capacity = lapply(split_memory, function(x) paste(x[3],x[4],x[5], collapse = ""))
+# transforming the list into dataframes
+drive_capacity = as.data.frame(drive_capacity)
+drive_type = as.data.frame(drive_type)
+extra_drive_capacity = as.data.frame(extra_drive_capacity)
+```
+
+The memory column was split into the hard drive capacity column and hard drive type.
+
+```{r}
+# drive capacity column
+drive_capacity = pivot_longer(drive_capacity,
+                      cols = colnames(drive_capacity),
+                      names_to = "var",
+                      values_to = "capacity")
+
+drive_capacity$capacity = gsub("GB", "", drive_capacity$capacity)
+
+drive_capacity$capacity = gsub("TB", "000", drive_capacity$capacity)
+
+drive_capacity$capacity = ifelse(drive_capacity$capacity=="1TB"|
+                                drive_capacity$capacity=="1.0000", 
+                                1000,drive_capacity$capacity)
+
+raw$drive_capacity = drive_capacity$capacity
+
+raw$drive_capacity = as.numeric(as.character(raw$drive_capacity))
+```
+
+```{r}
+# drive type column
+drive_type = as.data.frame(drive_type)
+drive_type = pivot_longer(drive_type,
+                          cols = colnames(drive_type),
+                          names_to = "var",
+                          values_to = "type")
+drive_type$type = gsub("NA", "", drive_type$type)
+drive_type$type = gsub("\\+", "", drive_type$type)
+drive_type$type = trimws(drive_type$type)
+
+raw$drive_type = drive_type$type
+```
+
+```{r}
+# extra drive capacity
+extra_drive_capacity = as.data.frame(extra_drive_capacity)
+
+extra_drive_capacity = pivot_longer(extra_drive_capacity,
+                          cols = colnames(extra_drive_capacity),
+                          names_to = "var",
+                          values_to = "extra")
+
+
+extra_drive_capacity$extra = ifelse(grepl("NA", extra_drive_capacity$extra), 0, 1)
+
+
+raw$extra_drive_capacity = factor(extra_drive_capacity$extra, 
+                                 levels = c(0,1),
+                                 labels = c("No","Yes"))
+```
+
+GPU - There are three major GPU brands in our dataset. It would be beneficial to simplify this column as well.
+
+```{r}
+# GPU
+split_gpu = str_split(raw$gpu, " ")
+gpu = lapply(split_gpu, function(x) paste(x[1], collapse = ""))
+gpu = as.data.frame(gpu)
+gpu = gpu %>% 
+  pivot_longer(cols = colnames(gpu),
+               names_to = "var",
+               values_to = "brand")
+
+raw$gpu = gpu$brand
+```
+
+```{r}
+# weight 
+raw$weight = gsub("kg", "", raw$weight)
+raw$weight = as.numeric(as.character(raw$weight))
+```
+
+```{r}
+# product
+raw$product <- iconv(raw$product, "UTF-8", "ASCII", sub="")
+raw$product <-  sub("\\(.*", "",raw$product)
+```
+
+# **EDA**
+
+```{r}
+# subsetting the desired columns
+df = raw %>% select(
+  company, 
+  product, 
+  product_type,
+  screen_size,
+  resolution,
+  display,
+  touch_screen,
+  cpu,
+  processor_speed,
+  ram,
+  drive_capacity,
+  drive_type,
+  extra_drive_capacity,
+  gpu,
+  op_sys,
+  weight,
+  price_euros
+  )
+```
+
+```{r}
+skimr::skim(df)
+```
+
+No missing values were identified. However, many features need to be formatted properly. So, let\'s start with the numerical variables.
+
+### Numerical variables
+
+-   Price
+
+```{r}
+# visualization
+df %>% ggplot(aes(price_euros) ) +
+  geom_histogram(fill="steelblue", binwidth = 500) +
+  labs(title = "distribution of the prices",
+       x = "prices",
+       y = "count of values")
+```
+
+-   Screen size
+
+```{r}
+# visualization
+df %>% ggplot(aes(screen_size) ) +
+  geom_histogram(fill="steelblue", binwidth = 2 ) +
+  labs(title = "distribution of the computer screen sizes",
+       x = "screen size",
+       y = "count of values")
+```
+
+-   CPU Processor Speed
+
+```{r}
+df %>% 
+  ggplot(aes(processor_speed)) +
+  geom_histogram(fill="steelblue")
+```
+
+-   Weight
+
+```{r}
+df %>% 
+  ggplot(aes(weight)) +
+  geom_histogram(fill="steelblue")
+```
+
+-   Drive capacity
+
+```{r}
+df %>% 
+  ggplot(aes(drive_capacity)) +
+  geom_histogram(fill="steelblue")
+```
+
+### Categorical variables
+
+First, let's create a function to facilitate the visualization of the categorical variables
+
+```{r}
+# function to visualize each unique categorical variables
+create_bar_chart <- function(data, var) {
+  data %>%
+    group_by(!!sym(var)) %>%
+    summarise(count = n()) %>%
+    ggplot(aes(fct_reorder(!!sym(var), count, .desc=TRUE), count)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    labs(x = var, 
+         y = "Count",
+         title = paste0("Count by ", var))
+  }
+```
+
+```{r}
+# function to visualize the average price across each categorical variables
+graph_price_by <- function(data, var) {
+  data %>%
+    group_by(!!sym(var)) %>%
+    summarise(avg = mean(price_euros)) %>%
+    ggplot(aes(fct_reorder(!!sym(var), avg, .desc=TRUE), avg)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    labs(x = var, 
+         y = "Average Price",
+         title = paste0("Average Price by ", var))
+}
+```
+
+-   Company
+
+```{r}
+create_bar_chart(df, "company") +
+  coord_flip()
+```
+
+```{r}
+graph_price_by(df, "company") +
+  coord_flip()
+```
+
+-   Product type
+
+```{r}
+create_bar_chart(df, "product_type")
+```
+
+```{r}
+graph_price_by(df, "product_type")
+```
+
+-   Resolution
+
+```{r}
+create_bar_chart(df, "resolution") +
+  coord_flip()
+```
+
+```{r}
+graph_price_by(df, "resolution") +
+  coord_flip()
+```
+
+-   Display
+
+```{r}
+create_bar_chart(df, "display") +
+  coord_flip() 
+```
+
+```{r}
+graph_price_by(df, "display") +
+  coord_flip()
+```
+
+-   CPU
+
+```{r}
+create_bar_chart(df, "cpu")
+```
+
+```{r}
+graph_price_by(df, "cpu")
+```
+
+-   Drive types
+
+```{r}
+create_bar_chart(df, "drive_type")
+```
+
+```{r}
+graph_price_by(df, "drive_type")
+```
+
+-   GPU
+
+```{r}
+create_bar_chart(df, "gpu")
+```
+
+```{r}
+graph_price_by(df, "gpu")
+```
+
+-   Operating system
+
+```{r}
+create_bar_chart(df, "op_sys")
+```
+
+```{r}
+graph_price_by(df, "op_sys")
+```
+
+-   Product
+
+```{r}
+# top 10 Products
+df %>%
+  count(product, sort = TRUE) %>% 
+  head(10) %>% 
+  ggplot(aes(fct_reorder(product, n), n)) +
+  geom_col(fill="steelblue") +
+  coord_flip() +
+  labs(
+      title = "Top 10 Products",
+      x = "Product",
+      y = "Count"
+    )
+```
+
+```{r}
+# Avg price by products
+df %>%
+  group_by(product, sort = TRUE) %>% 
+  summarise(avg = mean(price_euros)) %>% 
+  head(10) %>% 
+  ggplot(aes(fct_reorder(product, avg), avg)) +
+  geom_col(fill="steelblue") +
+  coord_flip() +
+  labs(
+      title = "Avg price for 10 Products",
+      x = "Product",
+      y = "Avg. Price"
+    )
+```
+
+-   Touch screen
+
+```{r}
+df %>% 
+  ggplot(aes(touch_screen, fill= touch_screen)) +
+  geom_bar() +
+    labs(
+      title = "Count of Products with Touch screen",
+      x = "Touch Screen",
+      y = "Ccount"
+    )
+```
+
+```{r}
+df %>% 
+  group_by(touch_screen) %>% 
+  summarise(avg = mean(price_euros)) %>% 
+  ggplot(aes(touch_screen, avg)) +
+  geom_col(fill = "steelblue") +
+    labs(
+      title = "Avg price for Products with Touch Screen",
+      x = "Touch Screen",
+      y = "Avg. Price"
+    )
+```
+
+-   Extra drive capacity
+
+```{r}
+df %>% 
+  ggplot(aes(extra_drive_capacity, fill= extra_drive_capacity)) +
+  geom_bar() +
+   labs(
+      title = "Count of Products with Extra Drive Capacity",
+      x = "Touch Screen",
+      y = "Ccount"
+    )
+```
+
+```{r}
+df %>% 
+  group_by(extra_drive_capacity) %>% 
+  summarise(avg = mean(price_euros)) %>% 
+  ggplot(aes(extra_drive_capacity, avg)) +
+  geom_col(fill = "steelblue") +
+    labs(
+      title = "Avg price Product has Extra Drive Capacity",
+      x = "Extra Drive Capacity",
+      y = "Avg. Price"
+    )
+```
